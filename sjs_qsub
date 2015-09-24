@@ -4,6 +4,7 @@
 
 import sys
 import os
+import re
 import getopt
 import sjs
 
@@ -35,23 +36,35 @@ def parse_opts(argv):
                 cluster.log('qsub: ignoring "-a %s"' % value)
             else:
                 cluster.log('qsub: ignoring "-a %s" in script' % value)
+        if option == '-l':
+            if argv is sys.argv:
+                cluster.log('qsub: ignoring "-l %s"' % value)
+            else:
+                cluster.log('qsub: ignoring "-l %s" in script' % value)
+        if option == '-V':
+            if argv is sys.argv:
+                cluster.log('qsub: ignoring "-V %s"' % value)
+            else:
+                cluster.log('qsub: ignoring "-V %s" in script' % value)
+        if option == '-j':
+            if argv is sys.argv:
+                cluster.log('qsub: ignoring "-j %s"' % value)
+            else:
+                cluster.log('qsub: ignoring "-j %s" in script' % value)
+
         if option == '-o':
             options['stdout'] = value
         if option == '-e':
             options['stderr'] = value
         if option == '-S':
             options['shell'] = value
-        if option == '-V':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-V %s"' % value)
-            else:
-                cluster.log('qsub: ignoring "-V %s" in script' % value)
-
+        if option == '-N':
+            options['job_name'] = value
     return args
 
 progname = os.path.basename(sys.argv.pop(0))
 
-option_string = 'o:e:V@:a:S:'
+option_string = 'o:e:V@:a:S:N:l:j:'
 
 options = {'stdout': '$HOME/$JOB_NAME.o$JOB_ID', 
            'stderr': '$HOME/$JOB_NAME.e$JOB_ID', 
@@ -69,21 +82,23 @@ if args is None:
 
 if not args:
     cluster.log('qsub reading from stdin')
-    job_name = 'STDIN'
+    options['job_name'] = 'STDIN'
     script = sys.stdin.read()
     script_args = []
 else:
     cluster.log('qsub reading from %s' % args[0])
-    job_name = os.path.basename(args[0])
+    options['job_name'] = os.path.basename(args[0])
     script = open(args[0]).read()
     script_args = args[1:]
 
 script_argv = []
 for line in script.split('\n'):
     line = line.strip()
-    if not line.startswith('#$'):
+    if not re.match(r'^#\$|^#PBS', line):
         continue
-    script_argv.extend(line[2:].strip().split())
+    script_argv.extend(filter(None, line.split(' ')[1:]))
+
+print script_argv
 script_opts = parse_opts(script_argv)
 if script_opts is None:
     sys.exit(1)
@@ -93,7 +108,8 @@ if script_opts:
     sys.stderr.write(msg)
     sys.exit(1)
 
-job = cluster.submit(job_name, 
+print options
+job = cluster.submit(options['job_name'], 
                      options['shell'], 
                      script, 
                      script_args, 
