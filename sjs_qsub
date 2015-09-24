@@ -51,7 +51,11 @@ def parse_opts(argv):
                 cluster.log('qsub: ignoring "-j %s"' % value)
             else:
                 cluster.log('qsub: ignoring "-j %s" in script' % value)
-
+        if option == '-cwd':
+            if argv is sys.argv:
+                cluster.log('qsub: ignoring "-cwd"')
+            else:
+                cluster.log('qsub: ignoring "-cwd"')
         if option == '-o':
             options['stdout'] = value
         if option == '-e':
@@ -64,7 +68,7 @@ def parse_opts(argv):
 
 progname = os.path.basename(sys.argv.pop(0))
 
-option_string = 'o:e:V@:a:S:N:l:j:'
+option_string = 'o:e:V@:a:S:N:l:j:cwd:'
 
 options = {'stdout': '$HOME/$JOB_NAME.o$JOB_ID', 
            'stderr': '$HOME/$JOB_NAME.e$JOB_ID', 
