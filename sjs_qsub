@@ -5,6 +5,7 @@
 import sys
 import os
 import re
+import socket
 import getopt
 import sjs
 
@@ -26,53 +27,26 @@ def parse_opts(argv):
         return None
 
     for (option, value) in opts:
-        if option == '-@':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-@ %s"' % value)
-            else:
-                cluster.log('qsub: ignoring "-@ %s" in script' % value)
-        if option == '-a':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-a %s"' % value)
-            else:
-                cluster.log('qsub: ignoring "-a %s" in script' % value)
-        if option == '-l':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-l %s"' % value)
-            else:
-                cluster.log('qsub: ignoring "-l %s" in script' % value)
-        if option == '-V':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-V %s"' % value)
-            else:
-                cluster.log('qsub: ignoring "-V %s" in script' % value)
-        if option == '-j':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-j %s"' % value)
-            else:
-                cluster.log('qsub: ignoring "-j %s" in script' % value)
-        if option == '-cwd':
-            if argv is sys.argv:
-                cluster.log('qsub: ignoring "-cwd"')
-            else:
-                cluster.log('qsub: ignoring "-cwd"')
-        if option == '-o':
-            options['stdout'] = value
-        if option == '-e':
-            options['stderr'] = value
-        if option == '-S':
-            options['shell'] = value
-        if option == '-N':
-            options['job_name'] = value
+        if option in ['-o', '-e', '-S', '-N']:
+            if option == '-o':
+                options['stdout'] = os.path.join(os.getcwd(), value)
+            if option == '-e':
+                options['stderr'] = os.path.join(os.getcwd(), value)
+            if option == '-S':
+                options['shell'] = value
+            if option == '-N':
+                options['job_name'] = value
+        else:
+            cluster.log('qsub: ignoring ' + ' '.join(filter(None, [option, value])) + ' in script')
     return args
 
 progname = os.path.basename(sys.argv.pop(0))
 
-option_string = 'o:e:V@:a:S:N:l:j:cwd:'
+option_string = 'o:e:V@:a:S:N:M:cwd:m:l:j:'
 
 options = {'stdout': '$HOME/$JOB_NAME.o$JOB_ID', 
            'stderr': '$HOME/$JOB_NAME.e$JOB_ID', 
-           'shell': '/bin/csh'}
+           'shell': '/bin/bash'}
 
 try:
     cluster = sjs.Cluster()
@@ -102,7 +76,6 @@ for line in script.split('\n'):
         continue
     script_argv.extend(filter(None, line.split(' ')[1:]))
 
-print script_argv
 script_opts = parse_opts(script_argv)
 if script_opts is None:
     sys.exit(1)
@@ -112,7 +85,6 @@ if script_opts:
     sys.stderr.write(msg)
     sys.exit(1)
 
-print options
 job = cluster.submit(options['job_name'], 
                      options['shell'], 
                      script, 
@@ -120,7 +92,7 @@ job = cluster.submit(options['job_name'],
                      options['stdout'], 
                      options['stderr'])
 
-print 'Your job %d ("%s") has been submitted' % (job.id, job.name)
+print str(job.id) + '.' + socket.gethostname()
 
 cluster.start_runner()
 

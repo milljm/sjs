@@ -17,6 +17,8 @@ create_job_table_sql =  """
                       stderr TEXT NOT NULL,
                       t_submit DATETIME NOT NULL,
                       t_start DATETIME DEFAULT NULL,
+                      job_state TEXT NOT NULL,
+                      exit_status TEXT NOT NULL,
                       pid INTEGER DEFAULT NULL)
 """
 

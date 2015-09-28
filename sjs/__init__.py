@@ -59,8 +59,10 @@ class Cluster:
                                            error_flag, 
                                            stdout, 
                                            stderr, 
-                                           t_submit)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+                                           t_submit,
+                                           job_state,
+                                           exit_status)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
         arg_query = """INSERT INTO argument (job_id, ordinal, argument) 
                        VALUES (?, ?, ?)"""
         try:
@@ -72,7 +74,9 @@ class Cluster:
                             False, 
                             stdout, 
                             stderr, 
-                            int(time.time()))
+                            int(time.time()),
+                            'Q',
+                            0)
             c.execute(insert_query, query_params)
             c.execute("SELECT LAST_INSERT_ROWID()")
             rowid = c.fetchone()[0]
@@ -80,16 +84,15 @@ class Cluster:
             job_id = c.fetchone()[0]
             script_fname = os.path.join(self.sjs_root, 'spool', str(job_id))
             open(script_fname, 'w').write(script)
-            c.execute("UPDATE job SET script = ? WHERE id = ?", 
+            c.execute("UPDATE job SET script = ?, job_state = 'Q' WHERE id = ?",
                       (script_fname, job_id))
             for (i, arg) in enumerate(script_args):
                 c.execute(arg_query, (job_id, i+1, arg))
+            db.commit()
             c.close()
         except:
             db.rollback()
             raise
-        else:
-            db.commit()
         db.close()
         self.log('queued job %d (%s)' % (job_id, name))
         return self.get_job(job_id)
@@ -105,12 +108,20 @@ class Cluster:
         jobs = [ self.get_job(job_id) for job_id in job_ids ]
         return jobs
 
+    def get_all_queued(self):
+        db = sqlite3.connect(os.path.join(self.sjs_root, 'db.sqlite'))
+        c = db.cursor()
+        c.execute("SELECT id FROM job WHERE job_state != 'F' ORDER BY id")
+        job_ids = [ row[0] for row in c ]
+        jobs = [ self.get_job(job_id) for job_id in job_ids ]
+        return jobs
+
     def get_queued_jobs(self):
         jobs = []
-        for job in self.get_all_jobs():
+        for job in self.get_all_queued():
             if job.error_flag:
                 continue
-            if job.is_running():
+            if job.job_state == 'R':
                 continue
             jobs.append(job)
         return jobs
@@ -118,7 +129,7 @@ class Cluster:
     def get_running_jobs(self):
         jobs = []
         for job in self.get_all_jobs():
-            if job.is_running():
+            if job.job_state == 'R':
                 jobs.append(job)
         return jobs
 
@@ -137,6 +148,7 @@ class Cluster:
                 os.O_WRONLY | os.O_APPEND)
         self.log('qrunner (%d) started' % os.getpid())
         while True:
+            # My attempt at limiting database locks :(
             if len(self.get_running_jobs()) >= self.slots:
                 self.log('qrunner (%d) all slots filled' % os.getpid())
                 break
@@ -148,6 +160,7 @@ class Cluster:
             try:
                 job.run()
             except Exception, data:
+                job.clean(1)
                 self.log('qrunner (%d) error running job %d' % (os.getpid(), 
                                                                 job.id))
                 self.log('qrunner (%d) %s' % (os.getpid(), str(data)))
@@ -179,6 +192,8 @@ class _Job:
         self.stdout = row_dict['stdout']
         self.stderr = row_dict['stderr']
         self.pid = row_dict['pid']
+        self.job_state = row_dict['job_state']
+        self.exit_status = row_dict['exit_status']
         if row_dict['t_submit'] is None:
             self.t_submit = None
         else:
@@ -200,6 +215,7 @@ class _Job:
 
     def run(self):
         try:
+            self.cluster.log('attempting to execute: %s %s' % (self.shell, self.script))
             args = [self.shell, self.script]
             args.extend(self.args)
             environ = dict(os.environ)
@@ -207,23 +223,25 @@ class _Job:
             environ['JOB_NAME'] = self.name
             stdin = open('/dev/null')
             stdout_path = string.Template(self.stdout).safe_substitute(environ)
-            stderr_path = string.Template(self.stderr).safe_substitute(environ)
+            #stderr_path = string.Template(self.stderr).safe_substitute(environ)
             stdout = open(stdout_path, 'w')
-            stderr = open(stderr_path, 'w')
+            #stderr = open(stderr_path, 'w')
             po = subprocess.Popen(args, 
-                                  stdin=stdin, 
-                                  stdout=stdout, 
-                                  stderr=stderr, 
+                                  stdin=stdin,
+                                  stdout=stdout,
+                                  stderr=stdout,
                                   env=environ)
             t = int(time.time())
             db = sqlite3.connect(os.path.join(self.cluster.sjs_root, 
                                               'db.sqlite'))
             try:
+                self.cluster.log('attempting to start job %d' % (self.id))
                 c = db.cursor()
-                c.execute("UPDATE job SET pid = ?, t_start = ? WHERE id = ?", 
+                c.execute("UPDATE job SET pid = ?, t_start = ?, job_state='R' WHERE id = ?",
                           (po.pid, t, self.id))
                 c.close()
             except:
+                self.cluster.log('failed to start job %d' % (self.id))
                 db.rollback()
                 raise
             else:
@@ -239,8 +257,7 @@ class _Job:
         po.wait()
         stdin.close()
         stdout.close()
-        stderr.close()
-        self.clean()
+        self.clean(po.returncode)
         fmt = 'qrunner (%d) job %d finished'
         self.cluster.log(fmt % (os.getpid(), self.id))
         return
@@ -249,8 +266,7 @@ class _Job:
         db = sqlite3.connect(os.path.join(self.cluster.sjs_root, 'db.sqlite'))
         try:
             c = db.cursor()
-            c.execute("UPDATE job SET error_flag = ? WHERE id = ?", 
-                      (True, self.id))
+            c.execute("UPDATE job SET error_flag = ?, job_state = 'F' WHERE id = ?", (True, self.id))
             c.close()
         except:
             db.rollback()
@@ -262,15 +278,16 @@ class _Job:
         return
 
     def is_running(self):
-        return self.t_start is not None
+        #return self.t_start is not None
+        return self.job_state
 
-    def clean(self):
+    def clean(self, exit_status):
         self.cluster.log('deleting job %d' % self.id)
         os.remove(self.script)
         db = sqlite3.connect(os.path.join(self.cluster.sjs_root, 'db.sqlite'))
         try:
             c = db.cursor()
-            c.execute("DELETE FROM job WHERE id = ?", (self.id, ))
+            c.execute("UPDATE job SET error_flag = ?, job_state = 'F', exit_status = ?  WHERE id = ?", (True, exit_status, self.id))
             c.close()
         except:
             db.rollback()
@@ -281,10 +298,26 @@ class _Job:
         return
 
     def delete(self):
-        if self.is_running():
+        #if self.is_running():
+        if self.job_state != 'F':
+            db = sqlite3.connect(os.path.join(self.cluster.sjs_root, 'db.sqlite'))
+            try:
+                c = db.cursor()
+                c.execute("UPDATE job SET error_flag = ?, job_state = 'F', exit_status = '1'  WHERE id = ?", (True, self.id))
+                c.close()
+            except:
+                db.rollback()
+                raise
+            else:
+                db.commit()
+            db.close()
             self.cluster.log('kill %d to end job %d' % (self.pid, self.id))
-            os.kill(self.pid, signal.SIGKILL)
-        self.clean()
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except:
+                print 'Job', self.pid, 'did not exist'
+                pass
+            self.clean(1)
         return
 
 # eof
