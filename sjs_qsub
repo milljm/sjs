@@ -42,7 +42,7 @@ def parse_opts(argv):
 
 progname = os.path.basename(sys.argv.pop(0))
 
-option_string = 'o:e:V@:a:S:N:M:cwd:m:l:j:'
+option_string = 'o:e:V@:a:S:N:M:cwd:m:l:j:P:'
 
 options = {'stdout': '$HOME/$JOB_NAME.o$JOB_ID', 
            'stderr': '$HOME/$JOB_NAME.e$JOB_ID', 
